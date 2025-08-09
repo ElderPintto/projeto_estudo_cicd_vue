@@ -1,0 +1,603 @@
+# .github/workflows/ci-cd-study.yml
+# Este é o arquivo que o GitHub Actions lê para saber o que fazer
+# Pense nele como uma "receita" que ensina ao GitHub como processar seu código
+
+name: 🎓 Pipeline CI/CD de Estudos - Vue.js
+
+# QUANDO executar este pipeline?
+# É como definir "quando a máquina deve acordar e trabalhar"
+on:
+  push:
+    branches: [main, develop] # Toda vez que você enviar código para estas branches
+    paths-ignore: # MAS ignore mudanças apenas nestes arquivos
+      - 'README.md' # Mudanças no README não precisam triggar deploy
+      - 'docs/**' # Documentação também não
+
+  pull_request:
+    branches: [main] # Toda vez que alguém abrir um PR para main
+
+  # Permite executar manualmente através da interface do GitHub
+  workflow_dispatch: # Botão "Run workflow" na aba Actions
+    inputs:
+      environment:
+        description: 'Ambiente para deploy'
+        required: true
+        default: 'staging'
+        type: choice
+        options:
+          - staging
+          - production
+
+# VARIÁVEIS GLOBAIS que todos os jobs podem usar
+# Como variáveis de ambiente que ficam disponíveis para todo mundo
+env:
+  NODE_VERSION: '24' # Versão do Node.js que vamos usar
+  CACHE_KEY_PREFIX: 'vue-cicd-study-v1' # Prefix para identificar nosso cache
+
+# JOBS são as "tarefas grandes" que queremos executar
+# Pense em cada job como um computador virtual separado fazendo uma parte do trabalho
+jobs:
+  # JOB 1: Preparação e validação básica
+  # Este job é como uma "inspeção inicial" - verifica se tudo está ok para prosseguir
+  setup-and-validate:
+    name: 🔍 Setup e Validação Inicial
+    runs-on: ubuntu-latest # Sistema operacional do computador virtual
+
+    # OUTPUTS: informações que este job vai passar para outros jobs
+    outputs:
+      cache-hit: ${{ steps.cache.outputs.cache-hit }}
+      package-hash: ${{ steps.package-hash.outputs.hash }}
+
+    steps:
+      # STEP 1: Buscar o código do repositório
+      # É como "baixar o projeto" para o computador virtual
+      - name: 📁 Checkout do código
+        uses: actions/checkout@v4 # Action oficial do GitHub para baixar código
+
+      # STEP 2: Calcular hash do package.json
+      # Hash é como uma "impressão digital" do arquivo
+      # Se o package.json não mudou, podemos reutilizar cache de dependências
+      - name: 🔢 Calcular hash do package.json
+        id: package-hash # ID para referenciar este step depois
+        run: |
+          HASH=$(sha256sum package.json package-lock.json | sha256sum | cut -d' ' -f1)
+          echo "hash=$HASH" >> $GITHUB_OUTPUT
+          echo "💡 Hash calculado: $HASH"
+
+      # STEP 3: Configurar Node.js
+      - name: ⚙️ Setup Node.js ${{ env.NODE_VERSION }}
+        uses: actions/setup-node@v4
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: 'npm' # GitHub Actions vai automaticamente cachear node_modules
+
+      # STEP 4: Tentar restaurar cache de dependências
+      - name: 💾 Cache de dependências
+        id: cache
+        uses: actions/cache@v3
+        with:
+          path: |
+            node_modules
+            ~/.npm
+          key: ${{ env.CACHE_KEY_PREFIX }}-${{ steps.package-hash.outputs.hash }}
+          restore-keys: |
+            ${{ env.CACHE_KEY_PREFIX }}-
+
+      # STEP 5: Instalar dependências (só se não tiver cache)
+      - name: 📦 Instalar dependências
+        if: steps.cache.outputs.cache-hit != 'true' # Só executa se não achou cache
+        run: |
+          echo "🔄 Cache não encontrado, instalando dependências..."
+          npm ci                    # npm ci é mais rápido e seguro para CI
+
+      # STEP 6: Validações básicas
+      - name: ✅ Validações básicas
+        run: |
+          echo "🔍 Verificando estrutura do projeto..."
+
+          # Verificar se arquivos importantes existem
+          if [ ! -f "package.json" ]; then
+            echo "❌ package.json não encontrado!"
+            exit 1
+          fi
+
+          if [ ! -f "src/main.js" ] && [ ! -f "src/main.ts" ]; then
+            echo "❌ Arquivo main.js ou main.ts não encontrado!"
+            exit 1
+          fi
+
+          if [ ! -d "src/components" ]; then
+            echo "⚠️ Pasta src/components não encontrada"
+          fi
+
+          echo "✅ Estrutura do projeto validada!"
+
+          # Mostrar informações úteis
+          echo "📊 Informações do projeto:"
+          echo "   📝 Nome: $(node -p "require('./package.json').name")"
+          echo "   🔢 Versão: $(node -p "require('./package.json').version")"
+          echo "   📦 Dependências: $(node -p "Object.keys(require('./package.json').dependencies || {}).length")"
+          echo "   🛠️ DevDependencies: $(node -p "Object.keys(require('./package.json').devDependencies || {}).length")"
+
+  # JOB 2: Verificação de qualidade do código
+  # Este job é como ter um "revisor de código automatizado"
+  code-quality:
+    name: 🔍 Qualidade do Código
+    runs-on: ubuntu-latest
+    needs: setup-and-validate # Este job SÓ executa se o anterior passou
+
+    steps:
+      - name: 📁 Checkout do código
+        uses: actions/checkout@v4
+
+      - name: ⚙️ Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: 'npm'
+
+      # Restaurar dependências do cache criado no job anterior
+      - name: 💾 Restaurar cache de dependências
+        uses: actions/cache@v3
+        with:
+          path: |
+            node_modules
+            ~/.npm
+          key: ${{ env.CACHE_KEY_PREFIX }}-${{ needs.setup-and-validate.outputs.package-hash }}
+
+      # Se por algum motivo não tiver cache, instalar dependências
+      - name: 📦 Instalar dependências (fallback)
+        if: needs.setup-and-validate.outputs.cache-hit != 'true'
+        run: npm ci
+
+      # Executar linting (verificação de código)
+      - name: 🔍 ESLint - Verificação de código
+        run: |
+          echo "🔍 Executando ESLint para verificar qualidade do código..."
+          echo "📋 Verificando:"
+          echo "   - Sintaxe JavaScript/TypeScript"
+          echo "   - Padrões de código Vue.js"
+          echo "   - Variáveis não utilizadas"
+          echo "   - Possíveis bugs"
+          echo "   - Consistência de formatação"
+
+          # Em um projeto real, seria: npm run lint
+          # Para estudos, vamos simular:
+          npm run simulate:lint
+
+          echo "✅ Verificação de código concluída!"
+
+      # Verificar formatação do código
+      - name: 💅 Prettier - Verificação de formatação
+        run: |
+          echo "💅 Verificando formatação do código..."
+          echo "📋 Analisando:"
+          echo "   - Indentação consistente"
+          echo "   - Aspas simples vs duplas"
+          echo "   - Quebras de linha"
+          echo "   - Espaçamento"
+
+          # Simular verificação de formatação
+          echo "✅ Formatação está consistente!"
+
+      # Análise de segurança básica
+      - name: 🛡️ Audit de segurança
+        run: |
+          echo "🛡️ Executando auditoria de segurança..."
+          npm audit --audit-level=high
+          echo "✅ Auditoria concluída!"
+
+  # JOB 3: Testes automatizados
+  # Este é onde "testamos se nossa aplicação realmente funciona"
+  tests:
+    name: 🧪 Testes Automatizados
+    runs-on: ubuntu-latest
+    needs: setup-and-validate
+
+    # STRATEGY permite executar o mesmo job em diferentes configurações
+    # É como testar em diferentes cenários
+    strategy:
+      matrix:
+        test-type: [unit, integration] # Executar testes unitários e integração separadamente
+
+    steps:
+      - name: 📁 Checkout do código
+        uses: actions/checkout@v4
+
+      - name: ⚙️ Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: 'npm'
+
+      - name: 💾 Restaurar dependências
+        uses: actions/cache@v3
+        with:
+          path: |
+            node_modules
+            ~/.npm
+          key: ${{ env.CACHE_KEY_PREFIX }}-${{ needs.setup-and-validate.outputs.package-hash }}
+
+      - name: 📦 Instalar dependências (fallback)
+        if: needs.setup-and-validate.outputs.cache-hit != 'true'
+        run: npm ci
+
+      # Executar testes baseado no tipo da matrix
+      - name: 🧪 Executar testes ${{ matrix.test-type }}
+        run: |
+          if [ "${{ matrix.test-type }}" = "unit" ]; then
+            echo "🔬 Executando testes unitários..."
+            echo "📋 Testando componentes individuais:"
+            echo "   - Renderização correta"
+            echo "   - Props e eventos"
+            echo "   - Métodos e computed"
+            echo "   - Lifecycle hooks"
+            
+            # npm run test:unit
+            npm run simulate:tests
+            
+          elif [ "${{ matrix.test-type }}" = "integration" ]; then
+            echo "🔗 Executando testes de integração..."
+            echo "📋 Testando interação entre componentes:"
+            echo "   - Comunicação parent-child"
+            echo "   - Store/State management"
+            echo "   - Roteamento"
+            echo "   - APIs mockadas"
+            
+            # Simular testes de integração
+            echo "✅ Testes de integração passaram!"
+          fi
+
+      # Upload dos resultados de teste para poder ver depois
+      - name: 📊 Upload resultados dos testes
+        uses: actions/upload-artifact@v4
+        if: always() # Sempre fazer upload, mesmo se testes falharam
+        with:
+          name: test-results-${{ matrix.test-type }}
+          path: |
+            coverage/
+            test-results/
+
+  # JOB 4: Testes End-to-End
+  # Simula um usuário real usando a aplicação
+  e2e-tests:
+    name: 🎭 Testes End-to-End
+    runs-on: ubuntu-latest
+    needs: [setup-and-validate, code-quality] # Precisa que dois jobs passem
+
+    steps:
+      - name: 📁 Checkout do código
+        uses: actions/checkout@v4
+
+      - name: ⚙️ Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: 'npm'
+
+      - name: 💾 Restaurar dependências
+        uses: actions/cache@v3
+        with:
+          path: |
+            node_modules
+            ~/.npm
+          key: ${{ env.CACHE_KEY_PREFIX }}-${{ needs.setup-and-validate.outputs.package-hash }}
+
+      - name: 📦 Instalar dependências (fallback)
+        if: needs.setup-and-validate.outputs.cache-hit != 'true'
+        run: npm ci
+
+      - name: 🎭 Executar testes E2E
+        run: |
+          echo "🎭 Iniciando testes End-to-End..."
+          echo "🔄 O que aconteceria:"
+          echo "   1. Subir servidor de desenvolvimento (npm run serve)"
+          echo "   2. Aguardar aplicação ficar online"
+          echo "   3. Abrir navegador automatizado (Cypress)"
+          echo "   4. Executar cenários de uso real"
+
+          # npm run test:e2e
+          npm run simulate:e2e
+
+      # Salvar screenshots e vídeos se testes falharem
+      - name: 📸 Upload screenshots/videos
+        uses: actions/upload-artifact@v4
+        if: failure() # Só se testes E2E falharam
+        with:
+          name: e2e-artifacts
+          path: |
+            cypress/screenshots/
+            cypress/videos/
+
+  # JOB 5: Build de produção
+  # Prepara a aplicação para ser enviada aos usuários
+  build:
+    name: 🏗️ Build de Produção
+    runs-on: ubuntu-latest
+    needs: [tests, e2e-tests] # Só faz build se testes passaram
+
+    outputs:
+      build-version: ${{ steps.version.outputs.version }}
+
+    steps:
+      - name: 📁 Checkout do código
+        uses: actions/checkout@v4
+
+      - name: ⚙️ Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: 'npm'
+
+      - name: 💾 Restaurar dependências
+        uses: actions/cache@v3
+        with:
+          path: |
+            node_modules
+            ~/.npm
+          key: ${{ env.CACHE_KEY_PREFIX }}-${{ needs.setup-and-validate.outputs.package-hash }}
+
+      - name: 📦 Instalar dependências (fallback)
+        if: needs.setup-and-validate.outputs.cache-hit != 'true'
+        run: npm ci
+
+      # Gerar número da versão (baseado na data/commit)
+      - name: 🔢 Gerar versão do build
+        id: version
+        run: |
+          # Usar timestamp + commit curto como versão
+          VERSION=$(date +'%Y%m%d.%H%M').$(git rev-parse --short HEAD)
+          echo "version=$VERSION" >> $GITHUB_OUTPUT
+          echo "📦 Versão do build: $VERSION"
+
+      # Executar build de produção
+      - name: 🏗️ Build da aplicação
+        run: |
+          echo "🏗️ Iniciando build de produção..."
+          echo "⚙️ Configurações:"
+          echo "   NODE_ENV=production"
+          echo "   Otimizações ativadas"
+          echo "   Source maps habilitados"
+
+          # npm run build (real)
+          npm run simulate:build
+
+          echo "✅ Build concluído!"
+
+          # Mostrar informações sobre os arquivos gerados
+          if [ -d "dist" ]; then
+            echo "📊 Arquivos gerados:"
+            du -sh dist/* 2>/dev/null || echo "   (pasta dist não encontrada na simulação)"
+          fi
+
+      # Executar testes no build de produção
+      - name: 🔍 Validar build de produção
+        run: |
+          echo "🔍 Validando build de produção..."
+          echo "✓ Verificando se index.html existe"
+          echo "✓ Verificando se assets foram gerados"
+          echo "✓ Verificando se não há links quebrados"
+          echo "✓ Validando estrutura de arquivos"
+          echo "✅ Build válido!"
+
+      # Salvar arquivos do build para usar no deploy
+      - name: 📦 Upload build artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: build-files-${{ steps.version.outputs.version }}
+          path: dist/
+          retention-days: 30 # Manter arquivos por 30 dias
+
+  # JOB 6: Deploy para Staging
+  # Ambiente de teste que simula produção
+  deploy-staging:
+    name: 🚀 Deploy para Staging
+    runs-on: ubuntu-latest
+    needs: build
+    if: github.ref == 'refs/heads/develop' || github.event_name == 'pull_request'
+
+    environment:
+      name: staging # GitHub Environment para aprovações/proteções
+      url: https://staging.meu-projeto.com
+
+    steps:
+      - name: 📁 Checkout do código
+        uses: actions/checkout@v4
+
+      # Baixar arquivos do build
+      - name: 📦 Download build artifacts
+        uses: actions/download-artifact@v4
+        with:
+          name: build-files-${{ needs.build.outputs.build-version }}
+          path: dist/
+
+      - name: 🚀 Simular deploy para staging
+        run: |
+          echo "🚀 Iniciando deploy para STAGING..."
+          echo "🎯 Ambiente: Staging"
+          echo "🌐 URL: https://staging.meu-projeto.com"
+          echo "📦 Versão: ${{ needs.build.outputs.build-version }}"
+
+          npm run simulate:deploy
+
+          echo "✅ Deploy para staging concluído!"
+
+      # Executar smoke tests no staging
+      - name: 💨 Smoke tests no staging
+        run: |
+          echo "💨 Executando smoke tests..."
+          echo "✓ Verificar se site carrega (HTTP 200)"
+          echo "✓ Verificar se JavaScript não tem erros"
+          echo "✓ Verificar se CSS carregou corretamente"
+          echo "✓ Verificar se pode fazer login (se aplicável)"
+          echo "✅ Smoke tests passaram!"
+
+      # Notificar equipe sobre deploy
+      - name: 📧 Notificar equipe
+        run: |
+          echo "📧 Notificação enviada:"
+          echo "   📍 Para: #desenvolvimento (Slack/Teams/Discord)"
+          echo "   📝 Mensagem: Deploy staging concluído"
+          echo "   🔗 Link: https://staging.meu-projeto.com"
+          echo "   🆔 Versão: ${{ needs.build.outputs.build-version }}"
+
+  # JOB 7: Deploy para Produção
+  # Só executa na branch main e pode precisar de aprovação manual
+  deploy-production:
+    name: 🌟 Deploy para Produção
+    runs-on: ubuntu-latest
+    needs: build
+    if: github.ref == 'refs/heads/main'
+
+    environment:
+      name: production # GitHub Environment com proteções
+      url: https://meu-projeto.com
+
+    steps:
+      - name: 📁 Checkout do código
+        uses: actions/checkout@v4
+
+      - name: 📦 Download build artifacts
+        uses: actions/download-artifact@v4
+        with:
+          name: build-files-${{ needs.build.outputs.build-version }}
+          path: dist/
+
+      # Backup do deploy anterior (estratégia de rollback)
+      - name: 💾 Backup deploy anterior
+        run: |
+          echo "💾 Fazendo backup do deploy anterior..."
+          echo "📁 Movendo arquivos atuais para backup/"
+          echo "🏷️ Tag de backup: backup-$(date +'%Y%m%d-%H%M%S')"
+          echo "✅ Backup criado!"
+
+      - name: 🌟 Deploy para PRODUÇÃO
+        run: |
+          echo "🌟 Iniciando deploy para PRODUÇÃO..."
+          echo "⚠️ ATENÇÃO: Deploy em ambiente de produção!"
+          echo "🎯 Ambiente: Production"
+          echo "🌐 URL: https://meu-projeto.com"
+          echo "📦 Versão: ${{ needs.build.outputs.build-version }}"
+
+          echo "🚀 Estratégias de deploy disponíveis:"
+          echo "   1. 🔵 Blue-Green: Deploy paralelo + switch"
+          echo "   2. 🎳 Rolling: Atualização gradual"
+          echo "   3. 🚫 Recreate: Para tudo + sobe novo"
+
+          npm run simulate:deploy
+
+          echo "✅ Deploy para produção concluído!"
+
+      # Testes pós-deploy críticos
+      - name: 🔍 Health checks pós-deploy
+        run: |
+          echo "🔍 Executando health checks críticos..."
+          echo "✓ Site responde (200 OK)"
+          echo "✓ Tempo de resposta < 2s"
+          echo "✓ Funcionalidades críticas funcionando"
+          echo "✓ Base de dados conectada"
+          echo "✓ APIs externas acessíveis"
+          echo "✓ SSL certificate válido"
+          echo "✅ Todos os health checks passaram!"
+
+      # Warming up do cache
+      - name: 🔥 Cache warming
+        run: |
+          echo "🔥 Aquecendo caches..."
+          echo "✓ Pre-loading páginas principais"
+          echo "✓ Cache de assets estático"
+          echo "✓ Cache de API endpoints"
+          echo "✅ Caches aquecidos!"
+
+      # Monitoramento pós-deploy
+      - name: 📊 Ativar monitoramento
+        run: |
+          echo "📊 Ativando monitoramento intensivo..."
+          echo "👀 Observando por 30 minutos:"
+          echo "   - Taxa de erro"
+          echo "   - Tempo de resposta"
+          echo "   - Uso de recursos"
+          echo "   - Logs de erro"
+          echo "✅ Monitoramento ativado!"
+
+      # Notificações importantes
+      - name: 🎉 Notificar sucesso do deploy
+        run: |
+          echo "🎉 DEPLOY PRODUÇÃO CONCLUÍDO!"
+          echo "📧 Notificações enviadas:"
+          echo "   📍 Slack: #releases"
+          echo "   📍 Email: stakeholders"
+          echo "   📍 SMS: oncall-engineer"
+          echo "📊 Detalhes:"
+          echo "   🆔 Versão: ${{ needs.build.outputs.build-version }}"
+          echo "   ⏱️ Duração: ~3 minutos"
+          echo "   🌐 URL: https://meu-projeto.com"
+          echo "   🔄 Rollback: Disponível se necessário"
+
+  # JOB 8: Monitoramento pós-deploy
+  # Monitora a aplicação por um tempo após o deploy
+  post-deploy-monitoring:
+    name: 📊 Monitoramento Pós-Deploy
+    runs-on: ubuntu-latest
+    needs: [deploy-production]
+    if: github.ref == 'refs/heads/main'
+
+    steps:
+      - name: 📊 Monitoramento contínuo
+        run: |
+          echo "📊 Iniciando monitoramento pós-deploy..."
+          echo "⏱️ Duração: 10 minutos"
+          echo "🎯 Métricas observadas:"
+          echo "   📈 Taxa de sucesso das requisições"
+          echo "   ⚡ Tempo médio de resposta"
+          echo "   💾 Uso de memória"
+          echo "   🔄 Taxa de bounce"
+          echo "   🐛 Erros JavaScript no frontend"
+
+          # Simular monitoramento por alguns "minutos"
+          for i in {1..5}; do
+            echo "🔍 Verificação $i/5:"
+            echo "   ✅ Taxa de sucesso: 99.8%"
+            echo "   ⚡ Tempo resposta: 245ms"
+            echo "   💾 Memória: 67% (normal)"
+            echo "   🔄 Bounce rate: 23% (bom)"
+            sleep 1
+          done
+
+          echo "🎉 Monitoramento concluído - Tudo funcionando perfeitamente!"
+
+      - name: 📈 Relatório final
+        run: |
+          echo "📈 RELATÓRIO FINAL DO DEPLOY"
+          echo "================================"
+          echo "✅ Status: SUCESSO"
+          echo "📦 Versão deployada: ${{ needs.build.outputs.build-version }}"
+          echo "⏱️ Tempo total pipeline: ~15 minutos"
+          echo "🔄 Jobs executados: 8/8"
+          echo "🧪 Testes executados: 47"
+          echo "🐛 Bugs encontrados: 0"
+          echo "📊 Performance: Melhorou 3%"
+          echo "👥 Impacto: 0 usuários afetados"
+          echo "💰 Custo: ~$0.15 (GitHub Actions)"
+          echo ""
+          echo "🎯 Próximos passos:"
+          echo "   - Monitorar métricas por 24h"
+          echo "   - Coletar feedback dos usuários"
+          echo "   - Planejar próximo release"
+          echo ""
+          echo "🏆 DEPLOY CONCLUÍDO COM SUCESSO!"
+
+# Configurações globais para todos os jobs
+# É como "regras da casa" que todos devem seguir
+defaults:
+  run:
+    shell: bash # Usar bash como shell padrão
+
+# Configurar permissões que este workflow precisa
+# É como dizer "este pipeline precisa de permissão para fazer X"
+permissions:
+  contents: read # Ler código do repositório
+  actions: read # Ler outros workflows
+  checks: write # Escrever resultados de testes
+  issues: write # Comentar em issues (opcional)
+  pull-requests: write # Comentar em PRs (opcional)
