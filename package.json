@@ -21,12 +21,12 @@
     "lint": "eslint . --fix",
     "format": "prettier --write src/",
     "pipeline:real:full": "npm run install && npm run lint && npm run tests && npm run build && npm run simulate:deploy",
-    "simulate:install": "node src/scripts/simulate-install.js",
-    "simulate:lint": "node src/scripts/simulate-lint.js",
-    "simulate:tests": "node src/scripts/simulate-tests.js",
-    "simulate:e2e": "node src/scripts/simulate-e2e.js",
-    "simulate:build": "node src/scripts/simulate-build.js",
-    "simulate:deploy": "node src/scripts/simulate-deploy.js",
+    "simulate:install": "node ./scripts/simulate-install.js",
+    "simulate:lint": "node ./scripts/simulate-lint.js",
+    "simulate:tests": "node ./scripts/simulate-tests.js",
+    "simulate:e2e": "node ./scripts/simulate-e2e.js",
+    "simulate:build": "node ./scripts/simulate-build.js",
+    "simulate:deploy": "node ./scripts/simulate-deploy.js",
     "pipeline:simulate:full": "npm run simulate:install && npm run simulate:lint && npm run simulate:tests && npm run simulate:build && npm run simulate:deploy"
   },
   "dependencies": {
