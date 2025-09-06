@@ -17,7 +17,7 @@ const lintResults = [
     issue: 'Variável "unusedVar" declarada mas não utilizada',
   },
   { file: 'src/views/Home.vue', line: 15, issue: 'Missing semicolon' },
-  { file: 'src/router/index.js', line: 8, issue: 'Prefer const over let' },
+  { file: 'src/router', line: 8, issue: 'Prefer const over let' },
 ]
 
 console.log('\n⚠️  Problemas encontrados:')
